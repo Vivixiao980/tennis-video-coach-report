@@ -1,13 +1,13 @@
 ---
 name: tennis-video-coach-report
-description: Create shareable tennis practice video analysis reports. Use when a user provides tennis video files or key frames and asks for AI tennis coaching, beginner-friendly technique review, skeleton/pose overlays, slow-motion swing clips, contact sheets, HTML reports, mobile PNG reports, or PDF reports. This public skill generates standalone local artifacts only; it does not update private diaries, cloud documents, remote docs, or training ledgers.
+description: Create shareable tennis practice video analysis reports. Use when a user provides tennis video files or key frames and asks for AI tennis coaching, beginner-friendly technique review, automatic rally segmentation, rally review/download, compiling favorite rallies into one video, skeleton/pose overlays, slow-motion swing clips, contact sheets, HTML reports, mobile PNG reports, or PDF reports. This public skill generates standalone local artifacts only; it does not update private diaries, cloud documents, remote docs, or training ledgers.
 ---
 
 # Tennis Video Coach Report
 
 ## Overview
 
-Turn a tennis practice video into a portable coaching package: extracted frames, contact sheets, selected key moments, optional MediaPipe skeleton overlays, early/middle/late slow-motion clips, and a mobile-friendly HTML/PNG/PDF report.
+Turn a tennis practice video into a portable coaching package: rally clips, a rally review viewer, extracted frames, contact sheets, selected key moments, optional MediaPipe skeleton overlays, early/middle/late slow-motion clips, and a mobile-friendly HTML/PNG/PDF report.
 
 This is the public/shareable version. Keep all outputs in the requested output folder or a new local run folder. Do not write to private diary systems, cloud documents, or user-specific paths unless the user explicitly asks.
 
@@ -47,7 +47,29 @@ Use the active Python if the packages already exist. Do not install globally unl
    - Pick 4-8 evidence moments: cover, ready/preparation, contact or near-contact, follow-through, main issue, and one positive frame.
    - Do not write a strong diagnosis before choosing the exact frame or clip that supports it.
 
-4. Add skeleton overlays when useful.
+4. Split long videos into candidate rallies when requested.
+   - Use this when the user has long continuous footage and wants to review rallies, save clips, or build a highlight video.
+   - Run:
+     ```bash
+     python3 <skill-root>/scripts/split_rallies.py <video> --outdir <run-folder>/rally_review
+     ```
+   - If the camera includes irrelevant motion outside the court, use a normalized crop:
+     ```bash
+     python3 <skill-root>/scripts/split_rallies.py <video> --outdir <run-folder>/rally_review --crop 0.05,0.20,0.95,0.95
+     ```
+   - Open `rally_review/rally_viewer.html`. The viewer supports favorites, playback speed buttons, and individual clip downloads.
+   - If segmentation is too strict or too loose, rerun with `--sensitivity` or `--threshold`.
+   - Treat automatic rally splits as candidates. Ask the user to confirm or name favorite IDs before compiling.
+
+5. Compile favorite rallies when the user chooses clips.
+   - Run:
+     ```bash
+     python3 <skill-root>/scripts/compile_rallies.py <run-folder>/rally_review/rally_index.json --ids 1,3,5 --out selected-rallies.mp4
+     ```
+   - Preserve the user's chosen order when provided.
+   - If stream-copy concat fails, the script falls back to re-encoding.
+
+6. Add skeleton overlays when useful.
    - Use skeletons for visible full-body or half-body frames. Prefer a frame where the player is not heavily occluded.
    - If multiple people are visible, crop around the player:
      ```bash
@@ -56,7 +78,7 @@ Use the active Python if the packages already exist. Do not install globally unl
    - The script writes full-frame overlay, crop overlay, comparison image, and JSON metadata.
    - Put the resulting paths in `analysis.json` under `pose_analysis`.
 
-5. Create slow-motion phase clips when requested or useful.
+7. Create slow-motion phase clips when requested or useful.
    - Use early/middle/late representative swings, preferably selected from contact sheets rather than raw thirds.
    - Run:
      ```bash
@@ -67,7 +89,7 @@ Use the active Python if the packages already exist. Do not install globally unl
      ```
    - Merge `swing_clips/swing_clips.json` phase paths into `analysis.json`.
 
-6. Write `analysis.json`.
+8. Write `analysis.json`.
    - Follow `references/report-schema.md`.
    - Read `references/analysis-checklist.md` before writing coaching claims.
    - Use plain coaching language. For beginners, choose one primary bottleneck and at most two secondary issues.
@@ -83,7 +105,7 @@ Use the active Python if the packages already exist. Do not install globally unl
      - next practice
      - training prescription
 
-7. Render the report.
+9. Render the report.
    - Run:
      ```bash
      python3 <skill-root>/scripts/render_tennis_report.py <run-folder>/analysis.json --outdir <run-folder>/report --pdf --png
@@ -112,10 +134,35 @@ Skeleton overlays are not enough for:
 
 State uncertainty when the player is small, blurred, occluded, or partly outside the frame. Treat pose output as an evidence layer, not the whole analysis.
 
+## Rally Segmentation Guidance
+
+The rally splitter uses motion changes to find candidate active-play intervals. It is useful for quickly reviewing long videos, but it is not a perfect tennis rules engine.
+
+Good uses:
+
+- isolate likely rally clips from long continuous footage
+- review each clip at 0.5x, 0.75x, 1x, 1.25x, 1.5x, or 2x speed
+- download individual rallies
+- favorite clips and compile a highlight reel
+- hand off chosen rally IDs into deeper technical analysis
+
+Limitations:
+
+- false positives can happen during camera movement, ball pickup, or coach movement
+- false negatives can happen when the player is small or motion is subtle
+- one real rally can be split into two if there is a long pause in the middle
+- two nearby rallies can merge if the between-rally pause is short
+
+Prefer a manual review step before final compilation. For important videos, do not delete the original long video or the unselected candidate clips.
+
 ## Output Standard
 
 Deliver these files when feasible:
 
+- `rally_review/rally_index.json` when rally splitting is requested
+- `rally_review/rally_viewer.html`
+- `rally_review/rallies/*.mp4`
+- `selected-rallies.mp4` when favorite rallies are compiled
 - `metadata.json`
 - `frame_index.json`
 - `contact_sheets/*.jpg`
