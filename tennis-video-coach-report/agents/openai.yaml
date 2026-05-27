@@ -1,0 +1,4 @@
+interface:
+  display_name: "Tennis Video Coach Report"
+  short_description: "Build tennis video reports with pose overlays."
+  default_prompt: "Analyze this tennis practice video and generate a coach-style HTML, PNG, and PDF report with skeleton key frames."

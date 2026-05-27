@@ -1,0 +1,11 @@
+{
+  "player_name": "Player",
+  "language": "zh-CN",
+  "level": "beginner",
+  "output_dir": "~/Tennis Reports",
+  "enable_pose": true,
+  "enable_slow_motion": true,
+  "enable_pdf": true,
+  "enable_png": true,
+  "report_title_template": "Tennis video review - {date}"
+}
