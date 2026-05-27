@@ -512,8 +512,10 @@ def write_viewer(outdir: Path, index_name: str, rallies: list[dict], mode: str, 
     code {{ white-space: pre-wrap; word-break: break-word; color: #465047; font-size: 12px; }}
     .grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr)); gap: 16px; }}
     .grid.portrait-heavy {{
-      grid-template-columns: repeat(auto-fit, minmax(min(100%, 360px), 430px));
-      justify-content: center;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      max-width: 920px;
+      margin: 0 auto;
+      gap: 14px;
     }}
     .card {{
       background: var(--paper);
@@ -537,6 +539,19 @@ def write_viewer(outdir: Path, index_name: str, rallies: list[dict], mode: str, 
     .card.portrait video {{
       aspect-ratio: 9 / 16;
       max-height: min(78vh, 760px);
+    }}
+    .card.portrait .top {{
+      display: grid;
+      justify-content: stretch;
+      gap: 4px;
+      line-height: 1.25;
+    }}
+    .card.portrait .body {{ padding: 11px; }}
+    .card.portrait h2 {{ font-size: 17px; }}
+    .card.portrait .speeds {{ gap: 6px; }}
+    .card.portrait button, .card.portrait .download {{
+      padding: 7px 9px;
+      font-size: 12px;
     }}
     .body {{ padding: 14px; }}
     h2 {{ margin: 0 0 10px; font-size: 20px; line-height: 1.2; letter-spacing: 0; }}
@@ -573,9 +588,15 @@ def write_viewer(outdir: Path, index_name: str, rallies: list[dict], mode: str, 
     @media (max-width: 520px) {{
       main {{ padding-left: 8px; padding-right: 8px; }}
       header {{ margin-left: -8px; margin-right: -8px; padding-left: 12px; padding-right: 12px; }}
-      .grid, .grid.portrait-heavy {{ grid-template-columns: 1fr; gap: 14px; }}
+      .grid {{ grid-template-columns: 1fr; gap: 14px; }}
+      .grid.portrait-heavy {{ grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }}
       .card.portrait video {{ max-height: 76vh; }}
       .top {{ align-items: flex-start; }}
+      .card.portrait .top {{ padding: 8px; font-size: 12px; }}
+      .card.portrait .body {{ padding: 9px; }}
+      .card.portrait h2 {{ font-size: 16px; margin-bottom: 8px; }}
+      .card.portrait .speeds {{ gap: 5px; margin-bottom: 8px; }}
+      .card.portrait button, .card.portrait .download {{ padding: 6px 7px; font-size: 11px; }}
     }}
   </style>
 </head>
