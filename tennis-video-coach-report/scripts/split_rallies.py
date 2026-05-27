@@ -366,19 +366,35 @@ def build_rallies(video: Path, outdir: Path, intervals: list[tuple[float, float]
     return rows
 
 
-def write_viewer(outdir: Path, index_name: str, rallies: list[dict], mode: str, mode_reason: str) -> Path:
+def viewer_orientation(metadata: dict, rallies: list[dict], outdir: Path) -> str:
+    for rally in rallies[:3]:
+        poster_path = outdir / str(rally.get("poster", ""))
+        if not poster_path.exists():
+            continue
+        image = cv2.imread(str(poster_path))
+        if image is None:
+            continue
+        height, width = image.shape[:2]
+        if height and width:
+            return "portrait" if height > width else "landscape"
+    return "portrait" if int(metadata.get("height") or 0) > int(metadata.get("width") or 0) else "landscape"
+
+
+def write_viewer(outdir: Path, index_name: str, rallies: list[dict], mode: str, mode_reason: str, source_orientation: str = "landscape") -> Path:
     cards = []
     mode_label = html.escape(MODE_LABELS.get(mode, mode))
     escaped_reason = html.escape(mode_reason)
     empty_text = "还没有检测到合适片段。可以换一个模式，或调高灵敏度再试一次。"
+    is_portrait_source = source_orientation == "portrait"
     for rally in rallies:
         clip = html.escape(rally["clip"])
         poster = html.escape(rally["poster"])
         label = html.escape(rally["label"])
         time_label = html.escape(rally["time_label"])
         duration = html.escape(f"{rally['duration']:.1f}s")
+        card_class = "card portrait" if is_portrait_source else "card"
         cards.append(f"""
-        <article class="card" data-id="{rally['id']}">
+        <article class="{card_class}" data-id="{rally['id']}">
           <div class="top">
             <label class="favorite-label"><input type="checkbox" class="favorite" data-id="{rally['id']}"> ⭐ 收藏</label>
             <span>⏱ {time_label} · {duration}</span>
@@ -401,6 +417,7 @@ def write_viewer(outdir: Path, index_name: str, rallies: list[dict], mode: str, 
         </article>
         """)
     cards_html = ''.join(cards) if cards else f'<p class="empty">{empty_text}</p>'
+    grid_class = "grid portrait-heavy" if is_portrait_source else "grid"
     html_text = f"""<!doctype html>
 <html lang="zh-CN">
 <head>
@@ -426,12 +443,12 @@ def write_viewer(outdir: Path, index_name: str, rallies: list[dict], mode: str, 
       color: var(--ink);
       font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
     }}
-    main {{ width: min(100%, 1100px); margin: 0 auto; padding: 22px 16px 40px; }}
+    main {{ width: min(100%, 1100px); margin: 0 auto; padding: 22px 12px 40px; }}
     header {{
       position: sticky;
       top: 0;
       z-index: 10;
-      margin: -22px -16px 18px;
+      margin: -22px -12px 18px;
       padding: 16px;
       background: rgba(255, 248, 239, .95);
       backdrop-filter: blur(12px);
@@ -493,7 +510,11 @@ def write_viewer(outdir: Path, index_name: str, rallies: list[dict], mode: str, 
     }}
     .selected strong {{ color: var(--green); }}
     code {{ white-space: pre-wrap; word-break: break-word; color: #465047; font-size: 12px; }}
-    .grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; }}
+    .grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr)); gap: 16px; }}
+    .grid.portrait-heavy {{
+      grid-template-columns: repeat(auto-fit, minmax(min(100%, 360px), 430px));
+      justify-content: center;
+    }}
     .card {{
       background: var(--paper);
       border: 1px solid var(--line);
@@ -513,6 +534,10 @@ def write_viewer(outdir: Path, index_name: str, rallies: list[dict], mode: str, 
     .favorite-label {{ color: var(--green); font-weight: 900; white-space: nowrap; }}
     input[type="checkbox"] {{ accent-color: var(--pink); }}
     video {{ display: block; width: 100%; background: #dfe6dc; aspect-ratio: 16 / 9; object-fit: contain; }}
+    .card.portrait video {{
+      aspect-ratio: 9 / 16;
+      max-height: min(78vh, 760px);
+    }}
     .body {{ padding: 14px; }}
     h2 {{ margin: 0 0 10px; font-size: 20px; line-height: 1.2; letter-spacing: 0; }}
     .speeds {{ display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }}
@@ -545,6 +570,13 @@ def write_viewer(outdir: Path, index_name: str, rallies: list[dict], mode: str, 
       color: var(--muted);
       font-size: 14px;
     }}
+    @media (max-width: 520px) {{
+      main {{ padding-left: 8px; padding-right: 8px; }}
+      header {{ margin-left: -8px; margin-right: -8px; padding-left: 12px; padding-right: 12px; }}
+      .grid, .grid.portrait-heavy {{ grid-template-columns: 1fr; gap: 14px; }}
+      .card.portrait video {{ max-height: 76vh; }}
+      .top {{ align-items: flex-start; }}
+    }}
   </style>
 </head>
 <body>
@@ -567,7 +599,7 @@ def write_viewer(outdir: Path, index_name: str, rallies: list[dict], mode: str, 
         <code id="command">收藏几个片段后，可以把这里的命令交给 Codex 合成精选视频。</code>
       </div>
     </header>
-    <section class="grid">
+    <section class="{grid_class}">
       {cards_html}
     </section>
     <footer>由 Vivi 制作而成</footer>
@@ -674,7 +706,8 @@ def main() -> int:
         "rallies": rallies,
     }
     index_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-    viewer = write_viewer(outdir, index_path.name, rallies, detected_mode, mode_reason)
+    source_orientation = viewer_orientation(metadata, rallies, outdir)
+    viewer = write_viewer(outdir, index_path.name, rallies, detected_mode, mode_reason, source_orientation)
     print(json.dumps({
         "outdir": str(outdir),
         "index": str(index_path),
