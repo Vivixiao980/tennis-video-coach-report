@@ -23,6 +23,14 @@ For long continuous videos:
 Use tennis-video-coach-report to split this long tennis video into rallies, create a rally viewer, and compile my favorite rallies into one video.
 ```
 
+The rally viewer is Chinese-first and supports three review formats:
+
+- `shot`: short clips for reviewing one swing or one ball.
+- `practice`: grouped practice chunks for lessons, coach feeding, and ball-machine sessions.
+- `rally`: longer active-play clips for true point/rally review.
+
+Use `--mode auto` to let the skill choose a format from the video rhythm, or force a mode when you already know what you want.
+
 ## Requirements
 
 - `ffmpeg` and `ffprobe`
@@ -53,4 +61,11 @@ After reviewing and favoriting clips, compile selected IDs:
 
 ```bash
 python3 tennis-video-coach-report/scripts/compile_rallies.py rally_review/rally_index.json --ids 1,3,5 --out selected-rallies.mp4
+```
+
+Generate two browsing styles from the same video:
+
+```bash
+python3 tennis-video-coach-report/scripts/split_rallies.py input.mov --outdir rally_review_shots --mode shot
+python3 tennis-video-coach-report/scripts/split_rallies.py input.mov --outdir rally_review_practice --mode practice
 ```

@@ -49,15 +49,25 @@ Use the active Python if the packages already exist. Do not install globally unl
 
 4. Split long videos into candidate rallies when requested.
    - Use this when the user has long continuous footage and wants to review rallies, save clips, or build a highlight video.
+   - Choose a review mode:
+     - `--mode auto`: default. Detects whether the footage looks like dense shots, practice chunks, or real rallies.
+     - `--mode shot`: short 2-6 second clips for checking individual swings.
+     - `--mode practice`: grouped practice chunks for coach feeding, ball-machine sessions, and repeated drills.
+     - `--mode rally`: longer active-play intervals for true point/rally review.
    - Run:
      ```bash
-     python3 <skill-root>/scripts/split_rallies.py <video> --outdir <run-folder>/rally_review
+     python3 <skill-root>/scripts/split_rallies.py <video> --outdir <run-folder>/rally_review --mode auto
+     ```
+   - If the user wants two browsing styles, generate both:
+     ```bash
+     python3 <skill-root>/scripts/split_rallies.py <video> --outdir <run-folder>/rally_review_shots --mode shot
+     python3 <skill-root>/scripts/split_rallies.py <video> --outdir <run-folder>/rally_review_practice --mode practice
      ```
    - If the camera includes irrelevant motion outside the court, use a normalized crop:
      ```bash
      python3 <skill-root>/scripts/split_rallies.py <video> --outdir <run-folder>/rally_review --crop 0.05,0.20,0.95,0.95
      ```
-   - Open `rally_review/rally_viewer.html`. The viewer supports favorites, playback speed buttons, and individual clip downloads.
+   - Open `rally_review/rally_viewer.html`. The viewer is Chinese-first and supports favorites, playback speed buttons, and individual clip downloads.
    - If segmentation is too strict or too loose, rerun with `--sensitivity` or `--threshold`.
    - Treat automatic rally splits as candidates. Ask the user to confirm or name favorite IDs before compiling.
 
@@ -145,6 +155,13 @@ Good uses:
 - download individual rallies
 - favorite clips and compile a highlight reel
 - hand off chosen rally IDs into deeper technical analysis
+
+Mode guidance:
+
+- `shot` mode is best when the user wants one swing or one ball at a time.
+- `practice` mode is best for lessons, coach feeding, and ball-machine sessions where several shots belong together.
+- `rally` mode is best for match play or true point construction.
+- `auto` mode should be the default, but keep a manual override available because camera movement, ball pickup, or coach movement can confuse motion-only detection.
 
 Limitations:
 

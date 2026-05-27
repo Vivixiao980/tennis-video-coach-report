@@ -19,6 +19,46 @@ except ImportError as exc:
     raise SystemExit("OpenCV and NumPy are required: python3 -m pip install opencv-python numpy") from exc
 
 
+MODE_PRESETS = {
+    "shot": {
+        "sample_fps": 1.8,
+        "sensitivity": 0.62,
+        "smooth_seconds": 0.9,
+        "min_duration": 2.0,
+        "merge_gap": 1.4,
+        "pad": 0.45,
+    },
+    "practice": {
+        "sample_fps": 1.5,
+        "sensitivity": 0.58,
+        "smooth_seconds": 1.2,
+        "min_duration": 2.5,
+        "merge_gap": 4.5,
+        "pad": 0.8,
+    },
+    "rally": {
+        "sample_fps": 2.0,
+        "sensitivity": 0.52,
+        "smooth_seconds": 1.4,
+        "min_duration": 4.0,
+        "merge_gap": 3.0,
+        "pad": 0.8,
+    },
+}
+
+MODE_LABELS = {
+    "shot": "逐拍模式",
+    "practice": "练习小段模式",
+    "rally": "Rally 回合模式",
+}
+
+MODE_PREFIXES = {
+    "shot": "逐拍片段",
+    "practice": "练习小段",
+    "rally": "回合",
+}
+
+
 def require_bin(name: str) -> None:
     if shutil.which(name) is None:
         raise SystemExit(f"Missing required command: {name}")
@@ -143,6 +183,58 @@ def auto_threshold(values: list[float], sensitivity: float) -> float:
     return p50 + (p90 - p50) * (1.0 - sensitivity)
 
 
+def mode_settings(args: argparse.Namespace, mode: str) -> dict:
+    settings = MODE_PRESETS[mode].copy()
+    for key in ("sample_fps", "sensitivity", "smooth_seconds", "min_duration", "merge_gap", "pad"):
+        value = getattr(args, key)
+        if value is not None:
+            settings[key] = value
+    return settings
+
+
+def classify_mode(intervals: list[tuple[float, float]], duration: float, requested_mode: str) -> tuple[str, str]:
+    if requested_mode != "auto":
+        return requested_mode, "手动选择该模式。"
+    if not intervals or duration <= 0:
+        return "practice", "片段数量不足，先按练习小段模式处理。"
+
+    durations = [end - start for start, end in intervals]
+    median_duration = float(np.median(np.array(durations, dtype=float)))
+    clips_per_minute = len(intervals) / max(duration / 60.0, 0.01)
+    if median_duration <= 5.5 and clips_per_minute >= 4.0:
+        return "shot", "检测到短片段很密集，更适合逐拍检查。"
+    if median_duration <= 12.0 and clips_per_minute >= 1.6:
+        return "practice", "检测到连续练习片段，保留相邻动作方便看节奏变化。"
+    return "rally", "检测到片段间隔更像真实对打回合，按 Rally 回合处理。"
+
+
+def analyze_motion(
+    video: Path,
+    metadata: dict,
+    crop: tuple[float, float, float, float] | None,
+    settings: dict,
+    manual_threshold: float | None,
+) -> tuple[list[dict], list[tuple[float, float]], float]:
+    samples = motion_samples(video, settings["sample_fps"], crop, max_width=360)
+    raw_values = [row["motion"] for row in samples]
+    window = max(1, int(round(settings["smooth_seconds"] * settings["sample_fps"])))
+    smooth_values = smooth(raw_values, window)
+    threshold = manual_threshold if manual_threshold is not None else auto_threshold(smooth_values, settings["sensitivity"])
+    for row, value in zip(samples, smooth_values):
+        row["motion_smooth"] = round(value, 4)
+        row["active"] = bool(value >= threshold and value > 0)
+    active = [bool(row["active"]) for row in samples]
+    intervals = intervals_from_activity(
+        samples,
+        active,
+        float(metadata["duration_seconds"]),
+        settings["min_duration"],
+        settings["merge_gap"],
+        settings["pad"],
+    )
+    return samples, intervals, threshold
+
+
 def intervals_from_activity(
     samples: list[dict],
     active: list[bool],
@@ -246,7 +338,7 @@ def rel(path: Path, root: Path) -> str:
         return str(path)
 
 
-def build_rallies(video: Path, outdir: Path, intervals: list[tuple[float, float]], max_width: int) -> list[dict]:
+def build_rallies(video: Path, outdir: Path, intervals: list[tuple[float, float]], max_width: int, mode: str) -> list[dict]:
     rally_dir = outdir / "rallies"
     poster_dir = outdir / "posters"
     rally_dir.mkdir(parents=True, exist_ok=True)
@@ -254,6 +346,7 @@ def build_rallies(video: Path, outdir: Path, intervals: list[tuple[float, float]
     for old in list(rally_dir.glob("rally_*.mp4")) + list(poster_dir.glob("rally_*.jpg")):
         old.unlink()
     rows = []
+    label_prefix = MODE_PREFIXES.get(mode, "片段")
     for idx, (start, end) in enumerate(intervals, start=1):
         stem = f"rally_{idx:03d}_t{int(start):06d}-{int(end):06d}"
         clip = rally_dir / f"{stem}.mp4"
@@ -265,7 +358,7 @@ def build_rallies(video: Path, outdir: Path, intervals: list[tuple[float, float]
             "start": start,
             "end": end,
             "duration": round(end - start, 3),
-            "label": f"Rally {idx:03d}",
+            "label": f"{label_prefix} {idx:03d}",
             "time_label": f"{timestamp_label(start)} - {timestamp_label(end)}",
             "clip": rel(clip, outdir),
             "poster": rel(poster, outdir),
@@ -273,8 +366,11 @@ def build_rallies(video: Path, outdir: Path, intervals: list[tuple[float, float]
     return rows
 
 
-def write_viewer(outdir: Path, index_name: str, rallies: list[dict]) -> Path:
+def write_viewer(outdir: Path, index_name: str, rallies: list[dict], mode: str, mode_reason: str) -> Path:
     cards = []
+    mode_label = html.escape(MODE_LABELS.get(mode, mode))
+    escaped_reason = html.escape(mode_reason)
+    empty_text = "还没有检测到合适片段。可以换一个模式，或调高灵敏度再试一次。"
     for rally in rallies:
         clip = html.escape(rally["clip"])
         poster = html.escape(rally["poster"])
@@ -284,8 +380,8 @@ def write_viewer(outdir: Path, index_name: str, rallies: list[dict]) -> Path:
         cards.append(f"""
         <article class="card" data-id="{rally['id']}">
           <div class="top">
-            <label><input type="checkbox" class="favorite" data-id="{rally['id']}"> Favorite</label>
-            <span>{time_label} · {duration}</span>
+            <label class="favorite-label"><input type="checkbox" class="favorite" data-id="{rally['id']}"> ⭐ 收藏</label>
+            <span>⏱ {time_label} · {duration}</span>
           </div>
           <video controls playsinline preload="metadata" poster="{poster}">
             <source src="{clip}" type="video/mp4">
@@ -293,61 +389,117 @@ def write_viewer(outdir: Path, index_name: str, rallies: list[dict]) -> Path:
           <div class="body">
             <h2>{label}</h2>
             <div class="speeds">
-              <button data-speed="0.5">0.5x</button>
-              <button data-speed="0.75">0.75x</button>
-              <button data-speed="1">1x</button>
-              <button data-speed="1.25">1.25x</button>
-              <button data-speed="1.5">1.5x</button>
-              <button data-speed="2">2x</button>
+              <button data-speed="0.5">🐢 0.5x</button>
+              <button data-speed="0.75">慢速 0.75x</button>
+              <button data-speed="1">🎾 正常</button>
+              <button data-speed="1.25">轻快 1.25x</button>
+              <button data-speed="1.5">⚡ 1.5x</button>
+              <button data-speed="2">冲刺 2x</button>
             </div>
-            <a class="download" href="{clip}" download>Download clip</a>
+            <a class="download" href="{clip}" download>⬇ 下载片段</a>
           </div>
         </article>
         """)
+    cards_html = ''.join(cards) if cards else f'<p class="empty">{empty_text}</p>'
     html_text = f"""<!doctype html>
-<html lang="en">
+<html lang="zh-CN">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Tennis Rally Review</title>
+  <title>网球片段浏览器</title>
   <style>
     * {{ box-sizing: border-box; }}
+    :root {{
+      --ink: #18241c;
+      --muted: #6a746c;
+      --green: #13865a;
+      --green-soft: #e8f5eb;
+      --pink: #f37a9d;
+      --pink-soft: #fff0f4;
+      --sun: #f7c948;
+      --paper: #fffdf8;
+      --line: rgba(24, 36, 28, .12);
+    }}
     body {{
       margin: 0;
-      background: #f5f2ea;
-      color: #132019;
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: #fff8ef;
+      color: var(--ink);
+      font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
     }}
-    main {{ width: min(100%, 1080px); margin: 0 auto; padding: 24px 16px 48px; }}
+    main {{ width: min(100%, 1100px); margin: 0 auto; padding: 22px 16px 40px; }}
     header {{
       position: sticky;
       top: 0;
       z-index: 10;
-      margin: -24px -16px 20px;
-      padding: 18px 16px;
-      background: rgba(245, 242, 234, .94);
+      margin: -22px -16px 18px;
+      padding: 16px;
+      background: rgba(255, 248, 239, .95);
       backdrop-filter: blur(12px);
-      border-bottom: 1px solid rgba(19, 32, 25, .1);
+      border-bottom: 1px solid var(--line);
     }}
-    h1 {{ margin: 0 0 8px; font-size: 34px; line-height: 1.05; }}
-    .hint {{ margin: 0; color: #56635b; line-height: 1.42; }}
+    .brand {{ display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }}
+    .logo {{
+      position: relative;
+      width: 52px;
+      height: 52px;
+      display: inline-grid;
+      place-items: center;
+      border: 2px solid rgba(19, 134, 90, .22);
+      border-radius: 50%;
+      background: var(--paper);
+      font-size: 27px;
+      box-shadow: 0 8px 18px rgba(24, 36, 28, .08);
+      flex: 0 0 auto;
+    }}
+    .logo::after {{
+      content: "🎾";
+      position: absolute;
+      right: -7px;
+      bottom: -7px;
+      width: 25px;
+      height: 25px;
+      display: grid;
+      place-items: center;
+      border-radius: 50%;
+      background: var(--paper);
+      border: 1px solid rgba(19, 134, 90, .2);
+      font-size: 17px;
+    }}
+    h1 {{ margin: 0; font-size: clamp(27px, 5vw, 38px); line-height: 1.08; letter-spacing: 0; }}
+    .hint {{ margin: 0; color: var(--muted); line-height: 1.55; font-size: 15px; }}
+    .mode-row {{ display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0 0; }}
+    .pill {{
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      min-height: 32px;
+      padding: 6px 10px;
+      border-radius: 999px;
+      border: 1px solid var(--line);
+      background: var(--paper);
+      color: var(--ink);
+      font-size: 13px;
+      font-weight: 800;
+    }}
+    .pill strong {{ color: var(--green); }}
     .selected {{
       margin-top: 12px;
       display: grid;
       gap: 8px;
       padding: 12px;
-      border-radius: 14px;
-      background: #fff;
-      border: 1px solid rgba(19, 32, 25, .1);
+      border-radius: 8px;
+      background: var(--paper);
+      border: 1px solid var(--line);
     }}
-    code {{ white-space: pre-wrap; word-break: break-word; }}
+    .selected strong {{ color: var(--green); }}
+    code {{ white-space: pre-wrap; word-break: break-word; color: #465047; font-size: 12px; }}
     .grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; }}
     .card {{
-      background: #fff;
-      border: 1px solid rgba(19, 32, 25, .1);
-      border-radius: 16px;
+      background: var(--paper);
+      border: 1px solid var(--line);
+      border-radius: 8px;
       overflow: hidden;
-      box-shadow: 0 14px 36px rgba(19, 32, 25, .08);
+      box-shadow: 0 12px 28px rgba(24, 36, 28, .08);
     }}
     .top {{
       display: flex;
@@ -356,39 +508,69 @@ def write_viewer(outdir: Path, index_name: str, rallies: list[dict]) -> Path:
       align-items: center;
       padding: 10px 12px;
       font-size: 13px;
-      color: #56635b;
+      color: var(--muted);
     }}
-    .top label {{ color: #08784f; font-weight: 800; }}
-    video {{ display: block; width: 100%; background: #dfe6dc; }}
+    .favorite-label {{ color: var(--green); font-weight: 900; white-space: nowrap; }}
+    input[type="checkbox"] {{ accent-color: var(--pink); }}
+    video {{ display: block; width: 100%; background: #dfe6dc; aspect-ratio: 16 / 9; object-fit: contain; }}
     .body {{ padding: 14px; }}
-    h2 {{ margin: 0 0 10px; font-size: 22px; }}
+    h2 {{ margin: 0 0 10px; font-size: 20px; line-height: 1.2; letter-spacing: 0; }}
     .speeds {{ display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }}
     button, .download {{
-      border: 0;
+      border: 1px solid rgba(19, 134, 90, .16);
       border-radius: 999px;
       padding: 8px 11px;
-      background: #e7f0e8;
-      color: #08784f;
+      background: var(--green-soft);
+      color: var(--green);
       font-weight: 800;
       text-decoration: none;
       cursor: pointer;
+      font-size: 13px;
     }}
+    button:hover, .download:hover {{ background: var(--pink-soft); color: #ba365d; border-color: rgba(243, 122, 157, .28); }}
     .download {{ display: inline-flex; }}
+    .empty {{
+      grid-column: 1 / -1;
+      margin: 0;
+      padding: 24px;
+      border: 1px dashed rgba(19, 134, 90, .35);
+      border-radius: 8px;
+      background: var(--paper);
+      color: var(--muted);
+      text-align: center;
+    }}
+    footer {{
+      padding: 28px 0 4px;
+      text-align: center;
+      color: var(--muted);
+      font-size: 14px;
+    }}
   </style>
 </head>
 <body>
   <main>
     <header>
-      <h1>Tennis Rally Review</h1>
-      <p class="hint">Review candidate rallies, play at different speeds, download clips, and favorite the clips you want to compile.</p>
+      <div class="brand">
+        <span class="logo" aria-hidden="true">👩🏻‍🦰</span>
+        <div>
+          <h1>网球片段浏览器</h1>
+          <p class="hint">查看系统自动拆出的候选片段，支持慢放、加速、收藏、下载，也可以把喜欢的片段合成一条精选视频。</p>
+        </div>
+      </div>
+      <div class="mode-row">
+        <span class="pill">🎬 当前模式：<strong>{mode_label}</strong></span>
+        <span class="pill">🧠 判断依据：{escaped_reason}</span>
+        <span class="pill">🎾 片段数：<strong>{len(rallies)}</strong></span>
+      </div>
       <div class="selected">
-        <strong>Selected rally IDs: <span id="selected">none</span></strong>
-        <code id="command">Pick favorites to generate a compile command.</code>
+        <strong>已收藏片段：<span id="selected">还没有收藏</span></strong>
+        <code id="command">收藏几个片段后，可以把这里的命令交给 Codex 合成精选视频。</code>
       </div>
     </header>
     <section class="grid">
-      {''.join(cards)}
+      {cards_html}
     </section>
+    <footer>由 Vivi 制作而成</footer>
   </main>
   <script>
     const storageKey = "tennis-rally-favorites:{html.escape(index_name)}";
@@ -405,10 +587,10 @@ def write_viewer(outdir: Path, index_name: str, rallies: list[dict]) -> Path:
     }}
     function renderFavorites() {{
       const ids = getFavorites().sort((a, b) => a - b);
-      selectedEl.textContent = ids.length ? ids.join(",") : "none";
+      selectedEl.textContent = ids.length ? ids.join(",") : "还没有收藏";
       commandEl.textContent = ids.length
         ? `python3 <skill-root>/scripts/compile_rallies.py {html.escape(index_name)} --ids ${{ids.join(",")}} --out selected-rallies.mp4`
-        : "Pick favorites to generate a compile command.";
+        : "收藏几个片段后，可以把这里的命令交给 Codex 合成精选视频。";
       boxes.forEach(box => box.checked = ids.includes(Number(box.dataset.id)));
     }}
     boxes.forEach(box => box.addEventListener("change", () => {{
@@ -438,13 +620,14 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Split a long tennis video into candidate rally clips.")
     parser.add_argument("video", type=Path)
     parser.add_argument("--outdir", type=Path, required=True)
-    parser.add_argument("--sample-fps", type=float, default=2.0)
-    parser.add_argument("--sensitivity", type=float, default=0.55, help="0.05-0.95; higher finds more/lower-motion rallies.")
+    parser.add_argument("--mode", choices=["auto", "shot", "practice", "rally"], default="auto", help="auto guesses the best review format; shot/practice/rally force a format.")
+    parser.add_argument("--sample-fps", type=float)
+    parser.add_argument("--sensitivity", type=float, help="0.05-0.95; higher finds more/lower-motion rallies.")
     parser.add_argument("--threshold", type=float, help="Manual motion threshold. Use when auto split is too strict or loose.")
-    parser.add_argument("--smooth-seconds", type=float, default=1.25)
-    parser.add_argument("--min-duration", type=float, default=3.0)
-    parser.add_argument("--merge-gap", type=float, default=2.0)
-    parser.add_argument("--pad", type=float, default=0.6)
+    parser.add_argument("--smooth-seconds", type=float)
+    parser.add_argument("--min-duration", type=float)
+    parser.add_argument("--merge-gap", type=float)
+    parser.add_argument("--pad", type=float)
     parser.add_argument("--crop", help="Optional normalized detection crop x1,y1,x2,y2.")
     parser.add_argument("--max-width", type=int, default=1080)
     args = parser.parse_args()
@@ -459,47 +642,46 @@ def main() -> int:
 
     metadata = ffprobe(video)
     crop = parse_crop(args.crop)
-    samples = motion_samples(video, args.sample_fps, crop, max_width=360)
-    raw_values = [row["motion"] for row in samples]
-    window = max(1, int(round(args.smooth_seconds * args.sample_fps)))
-    smooth_values = smooth(raw_values, window)
-    threshold = float(args.threshold) if args.threshold is not None else auto_threshold(smooth_values, args.sensitivity)
-    for row, value in zip(samples, smooth_values):
-        row["motion_smooth"] = round(value, 4)
-        row["active"] = bool(value >= threshold and value > 0)
-    active = [bool(row["active"]) for row in samples]
-    intervals = intervals_from_activity(
-        samples,
-        active,
-        float(metadata["duration_seconds"]),
-        args.min_duration,
-        args.merge_gap,
-        args.pad,
-    )
-    rallies = build_rallies(video, outdir, intervals, args.max_width)
+    manual_threshold = float(args.threshold) if args.threshold is not None else None
+    initial_mode = "practice" if args.mode == "auto" else args.mode
+    settings = mode_settings(args, initial_mode)
+    samples, intervals, threshold = analyze_motion(video, metadata, crop, settings, manual_threshold)
+    detected_mode, mode_reason = classify_mode(intervals, float(metadata["duration_seconds"]), args.mode)
+    if args.mode == "auto" and detected_mode != initial_mode:
+        settings = mode_settings(args, detected_mode)
+        samples, intervals, threshold = analyze_motion(video, metadata, crop, settings, manual_threshold)
+        mode_reason = f"{mode_reason} 已按该模式参数重新拆分。"
+
+    rallies = build_rallies(video, outdir, intervals, args.max_width, detected_mode)
     index_path = outdir / "rally_index.json"
     payload = {
         "video": metadata,
         "settings": {
-            "sample_fps": args.sample_fps,
-            "sensitivity": args.sensitivity,
+            "requested_mode": args.mode,
+            "mode": detected_mode,
+            "mode_label": MODE_LABELS.get(detected_mode, detected_mode),
+            "mode_reason": mode_reason,
+            "sample_fps": settings["sample_fps"],
+            "sensitivity": settings["sensitivity"],
             "threshold": round(threshold, 4),
-            "smooth_seconds": args.smooth_seconds,
-            "min_duration": args.min_duration,
-            "merge_gap": args.merge_gap,
-            "pad": args.pad,
+            "smooth_seconds": settings["smooth_seconds"],
+            "min_duration": settings["min_duration"],
+            "merge_gap": settings["merge_gap"],
+            "pad": settings["pad"],
             "crop": crop,
         },
         "samples": samples,
         "rallies": rallies,
     }
     index_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-    viewer = write_viewer(outdir, index_path.name, rallies)
+    viewer = write_viewer(outdir, index_path.name, rallies, detected_mode, mode_reason)
     print(json.dumps({
         "outdir": str(outdir),
         "index": str(index_path),
         "viewer": str(viewer),
         "rallies": len(rallies),
+        "requested_mode": args.mode,
+        "mode": detected_mode,
         "threshold": round(threshold, 4),
     }, ensure_ascii=False, indent=2))
     return 0
