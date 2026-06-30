@@ -1,42 +1,28 @@
 # Tennis Video Coach Report
 
-A shareable Codex skill for turning tennis practice videos into coach-style reports with rally segmentation, clip review/download, favorite-rally compilation, optional skeleton overlays, slow-motion swing clips, and HTML/PNG/PDF exports.
+A shareable Codex skill for turning tennis practice videos into coach-style reports.
 
-## Install
+It can extract key frames, split long videos into candidate rally or practice clips, create a Chinese-first rally viewer, generate slow-motion swing clips, add optional pose/skeleton overlays, and render a portable HTML/PNG/PDF report.
 
-Copy the skill folder into your Codex skills directory:
+## What It Does
 
-```bash
-mkdir -p ~/.codex/skills
-cp -R tennis-video-coach-report ~/.codex/skills/
-```
-
-Restart Codex, then ask:
-
-```text
-Use tennis-video-coach-report to analyze this tennis practice video and generate an HTML, PNG, and PDF report with skeleton key frames.
-```
-
-For long continuous videos:
-
-```text
-Use tennis-video-coach-report to split this long tennis video into rallies, create a rally viewer, and compile my favorite rallies into one video.
-```
-
-The rally viewer is Chinese-first and supports three review formats:
-
-- `shot`: short clips for reviewing one swing or one ball.
-- `practice`: grouped practice chunks for lessons, coach feeding, and ball-machine sessions.
-- `rally`: longer active-play clips for true point/rally review.
-
-Use `--mode auto` to let the skill choose a format from the video rhythm, or force a mode when you already know what you want.
+- Extracts representative frames and contact sheets from a tennis video
+- Splits long videos into candidate clips with `shot`, `practice`, `rally`, or `auto` mode
+- Generates a rally viewer with speed controls, favorites, and clip downloads
+- Compiles selected clips into one highlight video
+- Creates slow-motion swing clips for early, middle, and late moments
+- Adds MediaPipe pose overlays when the player is visible enough
+- Renders a coaching report as HTML, mobile PNG, and PDF
 
 ## Requirements
 
-- `ffmpeg` and `ffprobe`
-- Python packages listed in `tennis-video-coach-report/references/requirements.txt`
+Install command-line tools:
 
-For an isolated Python environment:
+```bash
+brew install ffmpeg
+```
+
+Install Python dependencies in a virtual environment:
 
 ```bash
 python3 -m venv .venv
@@ -44,28 +30,84 @@ python3 -m venv .venv
 .venv/bin/python -m playwright install chromium
 ```
 
-## Notes
+`ffmpeg` and `ffprobe` are required. Playwright is only needed for PNG/PDF export.
 
-This public version only creates local report artifacts. It does not sync to private diaries, cloud docs, or training ledgers.
+## Install As A Codex Skill
 
-## Rally Workflow
+Clone this repository, then copy or symlink the skill folder into your Codex skills directory:
 
-The rally splitter creates:
+```bash
+mkdir -p ~/.codex/skills
+ln -s "$PWD/tennis-video-coach-report" ~/.codex/skills/tennis-video-coach-report
+```
+
+Restart Codex if it does not discover the skill immediately.
+
+## Quick Start
+
+Ask Codex:
+
+```text
+Use tennis-video-coach-report to analyze /path/to/my-tennis-video.mov.
+Split useful clips, add slow-motion moments, and generate HTML, PNG, and PDF reports.
+```
+
+The skill creates a local run folder and keeps generated files inside it. It does not update private journals, cloud documents, remote docs, or training ledgers.
+
+## Useful Script Commands
+
+Extract frames:
+
+```bash
+python3 tennis-video-coach-report/scripts/extract_tennis_frames.py /path/to/video.mov --outdir ./runs/demo
+```
+
+Split candidate rallies or practice clips:
+
+```bash
+python3 tennis-video-coach-report/scripts/split_rallies.py /path/to/video.mov --outdir ./runs/demo/rally_review --mode auto
+```
+
+Create slow-motion clips:
+
+```bash
+python3 tennis-video-coach-report/scripts/make_swing_clips.py /path/to/video.mov --outdir ./runs/demo/swing_clips \
+  --event "early|12.50|Early|preparation is late|turn earlier" \
+  --event "middle|38.20|Middle|contact is cramped|leave more space" \
+  --event "late|63.80|Late|finish is incomplete|finish across the body"
+```
+
+Render a report:
+
+```bash
+python3 tennis-video-coach-report/scripts/render_tennis_report.py ./runs/demo/analysis.json --outdir ./runs/demo/report --pdf --png
+```
+
+Compile favorite clips after choosing IDs in the rally viewer:
+
+```bash
+python3 tennis-video-coach-report/scripts/compile_rallies.py ./runs/demo/rally_review/rally_index.json --ids 1,3,5 --out ./runs/demo/selected-rallies.mp4
+```
+
+## Outputs
+
+Typical outputs include:
 
 - `rally_review/rally_viewer.html`
-- `rally_review/rally_index.json`
 - `rally_review/rallies/*.mp4`
-- `rally_review/posters/*.jpg`
+- `contact_sheets/*.jpg`
+- `candidate_frames/*.jpg`
+- `generated_assets/*pose*.jpg`
+- `swing_clips/*/swing_slow_annotated.mp4`
+- `analysis.json`
+- `report/index.html`
+- `report/tennis-report-mobile.png`
+- `report/tennis-report.pdf`
 
-After reviewing and favoriting clips, compile selected IDs:
+## Notes
 
-```bash
-python3 tennis-video-coach-report/scripts/compile_rallies.py rally_review/rally_index.json --ids 1,3,5 --out selected-rallies.mp4
-```
+This is a coaching-assist workflow, not a professional biomechanics system. Automatic rally splitting and pose estimation are useful evidence layers, but they should be reviewed by a human before making strong technical conclusions.
 
-Generate two browsing styles from the same video:
+## License
 
-```bash
-python3 tennis-video-coach-report/scripts/split_rallies.py input.mov --outdir rally_review_shots --mode shot
-python3 tennis-video-coach-report/scripts/split_rallies.py input.mov --outdir rally_review_practice --mode practice
-```
+MIT

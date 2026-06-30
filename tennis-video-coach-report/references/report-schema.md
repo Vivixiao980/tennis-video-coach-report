@@ -6,7 +6,7 @@ Create `analysis.json` in the run folder, then render it with `scripts/render_te
 
 ```json
 {
-  "title": "网球日记：正手慢半拍",
+  "title": "网球训练报告：正手慢半拍",
   "date": "2026-05-22",
   "player": "Player",
   "video": {

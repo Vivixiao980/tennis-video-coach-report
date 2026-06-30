@@ -623,7 +623,7 @@ def write_viewer(outdir: Path, index_name: str, rallies: list[dict], mode: str, 
     <section class="{grid_class}">
       {cards_html}
     </section>
-    <footer>由 Vivi 制作而成</footer>
+    <footer>Made with Tennis Video Coach Report</footer>
   </main>
   <script>
     const storageKey = "tennis-rally-favorites:{html.escape(index_name)}";
